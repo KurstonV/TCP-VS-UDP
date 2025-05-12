@@ -4,7 +4,10 @@ import (
     "bufio"
     "fmt"
     "net"
+    "os"
+    "strings"
     "sync"
+    "time"
 )
 
  // A map to store connected clients by their connection object
@@ -34,6 +37,10 @@ func main() {
 }
 
 func handleConnection(conn net.Conn) {
+     addr := conn.RemoteAddr().String()
+    logFileName := strings.ReplaceAll(addr, ":", "_") + ".log"
+    logFile, _ := os.Create(logFileName) // logs overwritten per run
+    defer logFile.Close()
     // Ensure cleanup happens on disconnect
     defer func() {
         mutex.Lock()
@@ -58,10 +65,38 @@ func handleConnection(conn net.Conn) {
     // Create a scanner to read lines from the client
     scanner := bufio.NewScanner(conn)
     for scanner.Scan() {
+        input := scanner.Text()
+        if len(input) == 0 {
+            fmt.Fprintln(conn, "Say something...")
+            continue
+        }
+
+        if len(input) > 1024 {
+            // Reject overly long messages
+            fmt.Fprintln(conn, "Message too long. Max 1024 bytes.")
+            continue
+        }
+
+        // Log message to client-specific log file
+        logFile.WriteString(input + "\n")
+
+        // Server personality & command handling
+        switch {
+            case input == "/time":
+            fmt.Fprintln(conn, "Server time:", time.Now().Format(time.RFC1123))
+            case input == "/quit":
+            fmt.Fprintln(conn, "Disconnecting...")
+            return
+            case strings.HasPrefix(input, "/echo "):
+            // Echo the rest of the input
+            fmt.Fprintln(conn, strings.TrimPrefix(input, "/echo "))
+        default:
+
         // Format message with sender's address
         msg := fmt.Sprintf("[%s]: %s\n", conn.RemoteAddr(), scanner.Text())
         // Send message to all other clients
         broadcast(msg, conn)
+    }
     }
 }
 
