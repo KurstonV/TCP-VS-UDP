@@ -5,19 +5,22 @@ import (
     "fmt"
     "math/rand"
     "net"
+    "strings"
     "sync"
     "time"
 )
 
 const (
-    serverAddr    = "localhost:9000"
-    numClients    = 10
+    serverAddr        = "localhost:9000"
+    numClients        = 10
     messagesPerClient = 20
 )
 
 type Metrics struct {
-    Latency   []time.Duration
-    BytesSent int
+    Latency      []time.Duration
+    BytesSent    int
+    MessagesSent int
+    MessagesRecv int
     sync.Mutex
 }
 
@@ -45,15 +48,25 @@ func simulateClient(id int, metrics *Metrics, wg *sync.WaitGroup) {
     }
     defer conn.Close()
 
+    received := 0
+    sent := 0
+    seqPrefix := fmt.Sprintf("Client %d:", id)
+
+    // Receiver goroutine: Count matching echoes
+    done := make(chan struct{})
     go func() {
         scanner := bufio.NewScanner(conn)
         for scanner.Scan() {
-            // Simulate processing incoming messages (ignored in this test)
+            line := scanner.Text()
+            if strings.Contains(line, seqPrefix) {
+                received++
+            }
         }
+        close(done)
     }()
 
     for i := 0; i < messagesPerClient; i++ {
-        msg := fmt.Sprintf("Client %d: msg %d", id, i)
+        msg := fmt.Sprintf("%s msg %d", seqPrefix, i)
         start := time.Now()
         n, err := fmt.Fprintln(conn, msg)
         if err != nil {
@@ -66,17 +79,26 @@ func simulateClient(id int, metrics *Metrics, wg *sync.WaitGroup) {
         metrics.Lock()
         metrics.Latency = append(metrics.Latency, latency)
         metrics.BytesSent += n
+        metrics.MessagesSent++
         metrics.Unlock()
+
+        sent++
 
         jitter := time.Duration(rand.Intn(200)) * time.Millisecond
         time.Sleep(300*time.Millisecond + jitter)
 
-        // Randomly disconnect client early
         if rand.Float32() < 0.05 {
             fmt.Printf("Client %d disconnecting early\n", id)
             return
         }
     }
+
+    time.Sleep(1 * time.Second) // wait for final messages
+    <-done
+
+    metrics.Lock()
+    metrics.MessagesRecv += received
+    metrics.Unlock()
 }
 
 func report(metrics *Metrics) {
@@ -93,9 +115,18 @@ func report(metrics *Metrics) {
         avgLatency = totalLatency / time.Duration(len(metrics.Latency))
     }
 
+    loss := 0
+    if metrics.MessagesSent > metrics.MessagesRecv {
+        loss = metrics.MessagesSent - metrics.MessagesRecv
+    }
+
+    lossPercent := float64(loss) / float64(metrics.MessagesSent) * 100
+
     fmt.Println("====== Test Report ======")
     fmt.Printf("Clients: %d\n", numClients)
-    fmt.Printf("Messages: %d\n", numClients*messagesPerClient)
+    fmt.Printf("Messages Sent: %d\n", metrics.MessagesSent)
+    fmt.Printf("Messages Received (echo): %d\n", metrics.MessagesRecv)
+    fmt.Printf("Packet Loss: %.2f%%\n", lossPercent)
     fmt.Printf("Avg Latency: %v\n", avgLatency)
     fmt.Printf("Total Bytes Sent: %d\n", metrics.BytesSent)
     fmt.Printf("Throughput: %.2f KB\n", float64(metrics.BytesSent)/1024)

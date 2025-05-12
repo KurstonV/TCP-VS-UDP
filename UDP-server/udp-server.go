@@ -20,6 +20,7 @@ const (
 
 type Client struct {
 	addr *net.UDPAddr
+    lastSeen time.Time
 }
 
 func main() {
@@ -64,6 +65,8 @@ func handleUDPMessage(conn *net.UDPConn, addr *net.UDPAddr, data []byte) {
 		conn.WriteToUDP([]byte(fmt.Sprintf("Welcome! %d client(s) connected.\n", len(clients))), addr)
 	}
 	mutex.Unlock()
+
+    
 
 	// Create a log file named after client address (e.g., 127.0.0.1_49230.log)
 	logFileName := strings.ReplaceAll(clientID, ":", "_") + ".log"

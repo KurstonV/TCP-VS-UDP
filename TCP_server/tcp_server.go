@@ -34,6 +34,7 @@ func main() {
         // Handle each client in its own goroutine
         go handleConnection(conn)
     }
+    
 }
 
 func handleConnection(conn net.Conn) {
@@ -41,6 +42,7 @@ func handleConnection(conn net.Conn) {
     logFileName := strings.ReplaceAll(addr, ":", "_") + ".log"
     logFile, _ := os.Create(logFileName) // logs overwritten per run
     defer logFile.Close()
+    
     // Ensure cleanup happens on disconnect
     defer func() {
         mutex.Lock()
@@ -64,39 +66,49 @@ func handleConnection(conn net.Conn) {
 
     // Create a scanner to read lines from the client
     scanner := bufio.NewScanner(conn)
-    for scanner.Scan() {
+
+     for {
+        // ⏱ Set 30-second timeout for reading input
+        conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+
+        if !scanner.Scan() {
+            err := scanner.Err()
+            if err != nil {
+                // Handle timeout separately
+                netErr, ok := err.(net.Error)
+                if ok && netErr.Timeout() {
+                    fmt.Fprintln(conn, "Disconnected due to 30 seconds of inactivity.")
+                }
+            }
+            return
+        }
+
         input := scanner.Text()
+
         if len(input) == 0 {
             fmt.Fprintln(conn, "Say something...")
             continue
         }
 
         if len(input) > 1024 {
-            // Reject overly long messages
             fmt.Fprintln(conn, "Message too long. Max 1024 bytes.")
             continue
         }
-
-        // Log message to client-specific log file
+//write to the logfile
         logFile.WriteString(input + "\n")
-
-        // Server personality & command handling
+ //Response Protocols
         switch {
-            case input == "/time":
+        case input == "/time":
             fmt.Fprintln(conn, "Server time:", time.Now().Format(time.RFC1123))
-            case input == "/quit":
+        case input == "/quit":
             fmt.Fprintln(conn, "Disconnecting...")
             return
-            case strings.HasPrefix(input, "/echo "):
-            // Echo the rest of the input
+        case strings.HasPrefix(input, "/echo "):
             fmt.Fprintln(conn, strings.TrimPrefix(input, "/echo "))
         default:
-
-        // Format message with sender's address
-        msg := fmt.Sprintf("[%s]: %s\n", conn.RemoteAddr(), scanner.Text())
-        // Send message to all other clients
-        broadcast(msg, conn)
-    }
+            msg := fmt.Sprintf("[%s]: %s\n", conn.RemoteAddr(), input)
+            broadcast(msg, conn)
+        }
     }
 }
 
